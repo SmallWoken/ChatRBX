@@ -9,7 +9,7 @@ export interface ModelConfig {
 export interface WeightsData {
 	_placeholder?: boolean;
 	config: ModelConfig;
-	chars: string[]; // CHANGED: array, not string
+	chars: string;
 	stoi?: Record<string, number>;
 	weights: Record<string, number[] | number[][]>;
 }
@@ -125,7 +125,7 @@ export class TinyGPT {
 		this.itos = [];
 
 		for (let i = 0; i < data.chars.size(); i++) {
-			const ch = data.chars[i];
+			const ch = data.chars.sub(i + 1, i + 1);
 			this.stoi[ch] = i;
 			this.itos.push(ch);
 		}
