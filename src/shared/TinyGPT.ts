@@ -9,8 +9,9 @@ export interface ModelConfig {
 export interface WeightsData {
 	_placeholder?: boolean;
 	config: ModelConfig;
-	chars: string;
-	weights: { [key: string]: number[] | number[][] };
+	chars: string[]; // CHANGED: array, not string
+	stoi?: Record<string, number>;
+	weights: Record<string, number[] | number[][]>;
 }
 
 type Vec = number[];
@@ -53,12 +54,14 @@ function layerNorm(x: Vec, w: Vec, b: Vec): Vec {
 	let mean = 0;
 	for (let i = 0; i < n; i++) mean += x[i];
 	mean /= n;
+
 	let variance = 0;
 	for (let i = 0; i < n; i++) {
 		const d = x[i] - mean;
 		variance += d * d;
 	}
 	variance /= n;
+
 	const inv = 1 / math.sqrt(variance + 1e-5);
 	const out = zeros(n);
 	for (let i = 0; i < n; i++) out[i] = (x[i] - mean) * inv * w[i] + b[i];
@@ -72,13 +75,23 @@ function gelu(x: number): number {
 
 function softmax(x: Vec): Vec {
 	let maxV = x[0];
-	for (let i = 1; i < x.size(); i++) if (x[i] > maxV) maxV = x[i];
+	for (let i = 1; i < x.size(); i++) {
+		if (x[i] > maxV) maxV = x[i];
+	}
+
 	const out = zeros(x.size());
 	let s = 0;
 	for (let i = 0; i < x.size(); i++) {
 		out[i] = math.exp(x[i] - maxV);
 		s += out[i];
 	}
+
+	if (s <= 0) {
+		const uniform = 1 / x.size();
+		for (let i = 0; i < x.size(); i++) out[i] = uniform;
+		return out;
+	}
+
 	for (let i = 0; i < x.size(); i++) out[i] /= s;
 	return out;
 }
@@ -93,10 +106,16 @@ function sampleCategorical(probs: Vec): number {
 	return probs.size() - 1;
 }
 
+function cloneVec(v: Vec): Vec {
+	const out: Vec = [];
+	for (let i = 0; i < v.size(); i++) out.push(v[i]);
+	return out;
+}
+
 export class TinyGPT {
 	private config: ModelConfig;
-	private w: { [key: string]: Vec | Mat };
-	private stoi: { [key: string]: number };
+	private w: Record<string, Vec | Mat>;
+	private stoi: Record<string, number>;
 	private itos: string[];
 
 	constructor(data: WeightsData) {
@@ -104,10 +123,20 @@ export class TinyGPT {
 		this.w = data.weights;
 		this.stoi = {};
 		this.itos = [];
+
 		for (let i = 0; i < data.chars.size(); i++) {
-			const ch = data.chars.sub(i + 1, i + 1);
+			const ch = data.chars[i];
 			this.stoi[ch] = i;
 			this.itos.push(ch);
+		}
+
+		// Optional debug check against exported stoi
+		if (data.stoi !== undefined) {
+			for (const [ch, id] of pairs(data.stoi)) {
+				if (this.stoi[ch] !== id) {
+					warn(`[TinyGPT] stoi mismatch for ${ch}: local=${this.stoi[ch]} exported=${id}`);
+				}
+			}
 		}
 	}
 
@@ -117,6 +146,27 @@ export class TinyGPT {
 
 	private gm(key: string): Mat {
 		return this.w[key] as Mat;
+	}
+
+	private encode(text: string): number[] {
+		const tokens: number[] = [];
+		for (let i = 0; i < text.size(); i++) {
+			const ch = text.sub(i + 1, i + 1);
+			const id = this.stoi[ch];
+			if (id !== undefined) tokens.push(id);
+		}
+		return tokens;
+	}
+
+	private decode(tokens: number[]): string {
+		let out = "";
+		for (let i = 0; i < tokens.size(); i++) {
+			const id = tokens[i];
+			if (id >= 0 && id < this.itos.size()) {
+				out += this.itos[id];
+			}
+		}
+		return out;
 	}
 
 	private forward(tokens: number[]): Vec {
@@ -136,7 +186,9 @@ export class TinyGPT {
 			const row = zeros(n_embd);
 			const te = wte[tok];
 			const pe = wpe[t];
-			for (let d = 0; d < n_embd; d++) row[d] = te[d] + pe[d];
+			for (let d = 0; d < n_embd; d++) {
+				row[d] = te[d] + pe[d];
+			}
 			x.push(row);
 		}
 
@@ -145,10 +197,12 @@ export class TinyGPT {
 			const ln1_b = this.g(`blocks.${l}.ln1.bias`);
 			const ln2_w = this.g(`blocks.${l}.ln2.weight`);
 			const ln2_b = this.g(`blocks.${l}.ln2.bias`);
+
 			const c_attn_w = this.gm(`blocks.${l}.attn.c_attn.weight`);
 			const c_attn_b = this.g(`blocks.${l}.attn.c_attn.bias`);
 			const c_proj_w = this.gm(`blocks.${l}.attn.c_proj.weight`);
 			const c_proj_b = this.g(`blocks.${l}.attn.c_proj.bias`);
+
 			const fc_w = this.gm(`blocks.${l}.mlp.fc.weight`);
 			const fc_b = this.g(`blocks.${l}.mlp.fc.bias`);
 			const mlp_w = this.gm(`blocks.${l}.mlp.proj.weight`);
@@ -156,7 +210,8 @@ export class TinyGPT {
 
 			const qkv: Mat = [];
 			for (let t = 0; t < T; t++) {
-				qkv.push(linear(c_attn_w, layerNorm(x[t], ln1_w, ln1_b), c_attn_b));
+				const norm = layerNorm(x[t], ln1_w, ln1_b);
+				qkv.push(linear(c_attn_w, norm, c_attn_b));
 			}
 
 			const attn_out: Mat = [];
@@ -167,19 +222,24 @@ export class TinyGPT {
 
 				for (let t1 = 0; t1 < T; t1++) {
 					const scores = zeros(t1 + 1);
+
 					for (let t2 = 0; t2 <= t1; t2++) {
 						let dot = 0;
 						for (let d = 0; d < head_size; d++) {
-							dot += qkv[t1][hs + d] * qkv[t2][n_embd + hs + d];
+							const q = qkv[t1][hs + d];
+							const k = qkv[t2][n_embd + hs + d];
+							dot += q * k;
 						}
 						scores[t2] = dot * scale;
 					}
+
 					const att = softmax(scores);
 
 					for (let d = 0; d < head_size; d++) {
 						let sum = 0;
 						for (let t2 = 0; t2 <= t1; t2++) {
-							sum += att[t2] * qkv[t2][2 * n_embd + hs + d];
+							const v = qkv[t2][2 * n_embd + hs + d];
+							sum += att[t2] * v;
 						}
 						attn_out[t1][hs + d] = sum;
 					}
@@ -187,13 +247,18 @@ export class TinyGPT {
 			}
 
 			for (let t = 0; t < T; t++) {
-				vecAddInPlace(x[t], linear(c_proj_w, attn_out[t], c_proj_b));
+				const proj = linear(c_proj_w, attn_out[t], c_proj_b);
+				vecAddInPlace(x[t], proj);
 			}
 
 			for (let t = 0; t < T; t++) {
-				const h_raw = linear(fc_w, layerNorm(x[t], ln2_w, ln2_b), fc_b);
-				for (let i = 0; i < h_raw.size(); i++) h_raw[i] = gelu(h_raw[i]);
-				vecAddInPlace(x[t], linear(mlp_w, h_raw, mlp_b));
+				const norm = layerNorm(x[t], ln2_w, ln2_b);
+				const hRaw = linear(fc_w, norm, fc_b);
+				for (let i = 0; i < hRaw.size(); i++) {
+					hRaw[i] = gelu(hRaw[i]);
+				}
+				const proj = linear(mlp_w, hRaw, mlp_b);
+				vecAddInPlace(x[t], proj);
 			}
 
 			task.wait();
@@ -201,45 +266,82 @@ export class TinyGPT {
 
 		const ln_f_w = this.g("ln_f.weight");
 		const ln_f_b = this.g("ln_f.bias");
-		const x_final = layerNorm(x[T - 1], ln_f_w, ln_f_b);
-		return linearNoBias(this.gm("lm_head.weight"), x_final);
+		const xFinal = layerNorm(x[T - 1], ln_f_w, ln_f_b);
+		return linearNoBias(this.gm("lm_head.weight"), xFinal);
 	}
 
-	generate(prompt: string, maxTokens = 100, temperature = 0.8, topK = 40, onToken?: (partial: string) => void): string {
-		const tokens: number[] = [];
-		for (let i = 0; i < prompt.size(); i++) {
-			const ch = prompt.sub(i + 1, i + 1);
-			const id = this.stoi[ch];
-			if (id !== undefined) tokens.push(id);
+	generate(
+		prompt: string,
+		maxTokens = 100,
+		temperature = 0.8,
+		topK = 40,
+		onToken?: (partial: string) => void,
+	): string {
+		// Match training format better
+		const seed = `<BOS>User: ${prompt}\nBot:`;
+		const tokens = this.encode(seed);
+
+		if (tokens.size() === 0) {
+			return "[encode error]";
 		}
-		if (tokens.size() === 0) tokens.push(0);
 
-		let result = "";
+		let generated = "";
+
 		for (let step = 0; step < maxTokens; step++) {
-			const logits = this.forward(tokens);
+			const logits = cloneVec(this.forward(tokens));
 
-			for (let i = 0; i < logits.size(); i++) logits[i] /= temperature;
+			if (temperature <= 0) {
+				let bestIdx = 0;
+				for (let i = 1; i < logits.size(); i++) {
+					if (logits[i] > logits[bestIdx]) bestIdx = i;
+				}
+				tokens.push(bestIdx);
+
+				const ch = this.itos[bestIdx] ?? "";
+				generated += ch;
+				if (onToken !== undefined) onToken(generated);
+
+				if (generated.find("<EOS>")[0] !== undefined) break;
+				continue;
+			}
+
+			for (let i = 0; i < logits.size(); i++) {
+				logits[i] /= temperature;
+			}
 
 			if (topK > 0 && topK < logits.size()) {
-				const copy: Vec = [];
-				for (let i = 0; i < logits.size(); i++) copy.push(logits[i]);
-				copy.sort((a, b) => a > b);
-				const threshold = copy[topK - 1];
+				const sorted = cloneVec(logits);
+				sorted.sort((a, b) => a > b);
+				const threshold = sorted[topK - 1];
 				for (let i = 0; i < logits.size(); i++) {
-					if (logits[i] < threshold) logits[i] = -1e38;
+					if (logits[i] < threshold) logits[i] = -1e30;
 				}
 			}
 
-			const nextTok = sampleCategorical(softmax(logits));
+			const probs = softmax(logits);
+			const nextTok = sampleCategorical(probs);
 			tokens.push(nextTok);
-			result += this.itos[nextTok];
-			if (onToken !== undefined) onToken(result);
+
+			const ch = this.itos[nextTok] ?? "";
+			generated += ch;
+			if (onToken !== undefined) onToken(generated);
+
+			if (generated.find("<EOS>")[0] !== undefined) break;
 		}
 
-		return result;
+		const eosIdx = generated.find("<EOS>")[0];
+		if (eosIdx !== undefined) {
+			generated = generated.sub(1, eosIdx - 1);
+		}
+
+		return generated.gsub("^%s+", "")[0].gsub("%s+$", "")[0];
 	}
 
 	isReady(): boolean {
 		return this.w["wte.weight"] !== undefined;
+	}
+
+	debugEncode(text: string): number[] {
+		return this.encode(text);
 	}
 }
