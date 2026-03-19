@@ -28,13 +28,13 @@ function splitByEOS(s: string): string[] {
 }
 
 const thinkingPhrases = [
-	"pondering...",
-	"hmm...",
-	"let me think...",
-	"one moment...",
-	"considering...",
-	"thinking...",
-	"processing...",
+	"🤔 pondering...",
+	"✈️ hmm...",
+	"📝 let me think...",
+	"⌛ one moment...",
+	"🎲 considering...",
+	"💭 thinking...",
+	"💻 processing...",
 ];
 
 localPlayer.Chatted.Connect((message) => {
