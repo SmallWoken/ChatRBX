@@ -34,7 +34,7 @@ INPUT_FILE = DATASETS_DIR / "input_texts_optimized.txt"
 LABEL_FILE = DATASETS_DIR / "label_texts_optimized.txt"
 
 # Model architecture
-N_EMBD = 64
+N_EMBD = 96
 N_HEAD = 4              # must divide N_EMBD
 N_LAYER = 4
 BLOCK_SIZE = 64       # bigger context helps for chat patterns
