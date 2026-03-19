@@ -1,7 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(d:/projects/chatrbx/training/.venv/Scripts/pip.exe install:*)"
-    ]
-  }
-}
