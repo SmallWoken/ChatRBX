@@ -25,13 +25,13 @@ DATASETS_DIR = Path(__file__).parent.parent / "datasets"
 WEIGHTS_DIR  = Path(__file__).parent.parent / "weights"
 
 # Model architecture
-N_EMBD      = 32    # embedding dimension
-N_HEAD      = 2     # attention heads (must divide N_EMBD)
-N_LAYER     = 2     # transformer blocks
+N_EMBD      = 96    # embedding dimension
+N_HEAD      = 4     # attention heads (must divide N_EMBD)
+N_LAYER     = 4     # transformer blocks
 BLOCK_SIZE  = 64    # context window (characters)
 
 # Training
-MAX_ITERS   = 5000  # total gradient steps
+MAX_ITERS   = 15000  # total gradient steps
 BATCH_SIZE  = 32    # sequences per batch
 LR          = 3e-3  # learning rate
 EVAL_EVERY  = 500   # print loss every N iters
