@@ -1,17 +1,17 @@
 """
-Train TinyGPT on a tab-separated chatbot dataset.
+Train TinyGPT on preformatted chat-pair examples from:
 
-Expected dataset format:
-    training/datasets/chatbot dataset.txt
+    training/datasets/chat_pairs.txt
 
-Each non-empty line should look like:
-    prompt<TAB>reply
+Expected format:
+    <BOS>User: hello
+    Bot: hi<EOS>
+
+    <BOS>User: how are you?
+    Bot: i'm good<EOS>
 
 Usage (from training/):
     python src/train.py
-
-Outputs:
-    training/weights/checkpoint.pt
 """
 
 import sys
@@ -20,7 +20,6 @@ from pathlib import Path
 
 import torch
 
-# Allow importing model.py from the same directory
 sys.path.insert(0, str(Path(__file__).parent))
 from model import TinyGPT
 
@@ -29,15 +28,13 @@ from model import TinyGPT
 # ---------------------------------------------------------------------------
 DATASETS_DIR = Path(__file__).parent.parent / "datasets"
 WEIGHTS_DIR = Path(__file__).parent.parent / "weights"
-DATA_FILE = DATASETS_DIR / "chatbot dataset.txt"
+DATA_FILE = DATASETS_DIR / "chat_pairs.txt"
 
-# Model architecture
 N_EMBD = 96
 N_HEAD = 4
 N_LAYER = 4
-BLOCK_SIZE = 96
+BLOCK_SIZE = 120
 
-# Training
 MAX_ITERS = 15000
 BATCH_SIZE = 32
 LR = 8e-4
@@ -52,47 +49,57 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # ---------------------------------------------------------------------------
 
 
-def normalize_text(text: str) -> str:
-    text = text.replace("\r", " ").replace("\n", " ").strip()
-    text = " ".join(text.split())
-    return text
+def normalize_spaces(text: str) -> str:
+    return " ".join(text.strip().split())
+
+
+def clean_example_block(block: str) -> str | None:
+    block = block.strip()
+    if not block:
+        return None
+
+    if not block.startswith("<BOS>User:"):
+        return None
+    if "Bot:" not in block or "<EOS>" not in block:
+        return None
+
+    try:
+        user_part = block.split("<BOS>User:", 1)[1].split("\nBot:", 1)[0]
+        bot_part = block.split("\nBot:", 1)[1].split("<EOS>", 1)[0]
+    except IndexError:
+        return None
+
+    user = normalize_spaces(user_part)
+    bot = normalize_spaces(bot_part)
+
+    if not user or not bot:
+        return None
+
+    if len(user) > 120 or len(bot) > 180:
+        return None
+
+    return f"<BOS>User: {user}\nBot: {bot}<EOS>"
 
 
 def load_examples() -> list[str]:
     if not DATA_FILE.exists():
         sys.exit(f"Missing dataset file: {DATA_FILE}")
 
-    raw = DATA_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
+    raw = DATA_FILE.read_text(encoding="utf-8", errors="replace")
+
+    # split on blank-line-separated examples
+    blocks = raw.split("\n\n")
 
     examples: list[str] = []
     seen: set[str] = set()
     skipped = 0
 
-    for line in raw:
-        line = line.strip()
-        if not line:
-            continue
-
-        if "\t" not in line:
+    for block in blocks:
+        ex = clean_example_block(block)
+        if ex is None:
             skipped += 1
             continue
 
-        user, bot = line.split("\t", 1)
-        user = normalize_text(user)
-        bot = normalize_text(bot)
-
-        if not user or not bot:
-            skipped += 1
-            continue
-
-        # Filter out absurdly long rows for this tiny char model
-        if len(user) > 120 or len(bot) > 180:
-            skipped += 1
-            continue
-
-        ex = f"<BOS>User: {user}\nBot: {bot}<EOS>"
-
-        # Deduplicate exact repeats
         if ex in seen:
             continue
         seen.add(ex)
@@ -103,7 +110,7 @@ def load_examples() -> list[str]:
 
     print(f"Loaded {len(examples)} cleaned examples from {DATA_FILE.name}")
     if skipped:
-        print(f"Skipped {skipped} malformed/empty/too-long line(s)")
+        print(f"Skipped {skipped} malformed/empty/too-long example(s)")
 
     print("\nExample:")
     print(examples[0])
