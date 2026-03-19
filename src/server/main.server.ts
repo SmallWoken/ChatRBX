@@ -20,7 +20,9 @@ chatRemote.OnServerInvoke = (_player: Player, ...args: unknown[]) => {
 	if (!model.isReady()) return "[model not trained yet]";
 
 	const trimmed = prompt.sub(1, 128);
-	const response = model.generate(trimmed, 150, 0.8, 40);
+	const response = model.generate(trimmed, 150, 0.8, 40, (partial) => {
+		print(`[gen] ${partial}`);
+	});
 	return response;
 };
 

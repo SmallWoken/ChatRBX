@@ -195,6 +195,8 @@ export class TinyGPT {
 				for (let i = 0; i < h_raw.size(); i++) h_raw[i] = gelu(h_raw[i]);
 				vecAddInPlace(x[t], linear(mlp_w, h_raw, mlp_b));
 			}
+
+			task.wait();
 		}
 
 		const ln_f_w = this.g("ln_f.weight");
@@ -203,7 +205,7 @@ export class TinyGPT {
 		return linearNoBias(this.gm("lm_head.weight"), x_final);
 	}
 
-	generate(prompt: string, maxTokens = 100, temperature = 0.8, topK = 40): string {
+	generate(prompt: string, maxTokens = 100, temperature = 0.8, topK = 40, onToken?: (partial: string) => void): string {
 		const tokens: number[] = [];
 		for (let i = 0; i < prompt.size(); i++) {
 			const ch = prompt.sub(i + 1, i + 1);
@@ -231,6 +233,7 @@ export class TinyGPT {
 			const nextTok = sampleCategorical(softmax(logits));
 			tokens.push(nextTok);
 			result += this.itos[nextTok];
+			if (onToken !== undefined) onToken(result);
 		}
 
 		return result;
